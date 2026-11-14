@@ -32,6 +32,7 @@ const (
 
 	MotionSitDown = 1
 	MotionStandUp = 0
+	MotionJump    = 2
 )
 
 var consumableItemTypes = []uint8{25, 44, 100, 101, 102}

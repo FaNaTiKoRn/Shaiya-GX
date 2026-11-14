@@ -154,6 +154,7 @@ func (s *Session) sacrifice() {
 	}
 	s.dead, s.autoAttack, s.cast = true, false, nil
 	s.actionLockUntil = time.Time{}
+	s.skillActionUntil = time.Time{}
 	s.clearBuffsOnDeath()
 	s.log.Printf("GX Server World character sacrificed itself character_id=%d", ch.ID)
 }

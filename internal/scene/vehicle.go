@@ -88,7 +88,7 @@ func (v *Vehicle) SetMovement(moving, backward bool) {
 }
 
 // SetJumping starts the mount's own ANI when that vehicle model has one.
-// The rider remains on its regular riding pose while the mount leaves ground.
+// The rider keeps the riding or skating pose and follows the animated seat.
 func (v *Vehicle) SetJumping() {
 	if v == nil || v.CreatureActor == nil || v.jumping || len(v.visual.Animations) < 2 {
 		return
@@ -105,6 +105,8 @@ func (v *Vehicle) SetJumping() {
 	v.cueTime = 0
 	v.jumping = true
 }
+
+func (v *Vehicle) Jumping() bool { return v != nil && v.jumping }
 
 func (v *Vehicle) Update(dt float32) {
 	if v == nil || v.CreatureActor == nil {

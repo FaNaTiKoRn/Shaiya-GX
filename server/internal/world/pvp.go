@@ -331,6 +331,7 @@ func (s *Session) tickUserHits() {
 			s.dead, s.autoAttack, s.cast = true, false, nil
 			s.lastAutoAttackAt = time.Time{}
 			s.actionLockUntil = time.Time{}
+			s.skillActionUntil = time.Time{}
 			s.clearBuffsOnDeath()
 		}
 	}

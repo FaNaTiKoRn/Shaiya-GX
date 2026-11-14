@@ -87,9 +87,10 @@ func (s *Session) blocks() (actionA, move, actionB int) {
 	return
 }
 
-// actionBlocked: no attacks or skills while stunned, asleep, casting or mounting.
+// actionBlocked: no attacks or skills while stunned, asleep, casting,
+// mounting, or recovering from a skill release animation.
 func (s *Session) actionBlocked() bool {
-	if s.cast != nil || s.mountCast != nil {
+	if s.cast != nil || s.mountCast != nil || s.skillActionUntil.After(time.Now()) {
 		return true
 	}
 	a, _, b := s.blocks()
@@ -227,6 +228,7 @@ func (s *Session) tickDebuffs(now time.Time) bool {
 			}
 			s.dead, s.autoAttack, s.cast = true, false, nil
 			s.actionLockUntil = time.Time{}
+			s.skillActionUntil = time.Time{}
 			s.clearBuffsOnDeath()
 			return true
 		}

@@ -250,6 +250,7 @@ func (s *Session) processPendingCast() {
 
 func (s *Session) startCooldown(k db.CharacterSkill, def *db.SkillDef) {
 	s.skillCooldowns[k.SkillID] = time.Now().Add(time.Duration(def.ResetTimeSeconds) * time.Second)
+	s.startSkillActionRecovery(k.SkillID, k.Level)
 	k.Delay = int16(min(def.ResetTimeSeconds, 32767))
 	if err := db.SaveCharacterSkill(s.char.ID, k); err != nil {
 		s.log.Printf("GX Server World failed to save skill cooldown: %v", err)

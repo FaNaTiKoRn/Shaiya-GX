@@ -87,6 +87,7 @@ func (s *Session) applyTeleport(mapID uint16, x, y, z float32, label string) {
 		guildDuelLeave(s.player, nil, 1)
 	}
 	s.actionLockUntil = time.Time{}
+	s.skillActionUntil = time.Time{}
 	s.clearView(mapID == ch.MapID)
 	ch.MapID, ch.PosX, ch.PosY, ch.PosZ = mapID, x, y, z
 	if s.player != nil {
@@ -152,6 +153,9 @@ func (s *Session) refuseMovementDuringAction(now time.Time, direction uint16) bo
 	} else if s.mountCast != nil {
 		reason = "mount cast"
 		remaining = max(s.mountCast.readyAt.Sub(now), 0)
+	} else if s.skillActionUntil.After(now) {
+		reason = "skill release animation"
+		remaining = s.skillActionUntil.Sub(now)
 	} else if s.actionLockUntil.After(now) {
 		reason = "weapon recovery"
 		remaining = s.actionLockUntil.Sub(now)

@@ -61,11 +61,16 @@ func (a *App) confirmedVehicle(p []byte) {
 	if r.On != 0 {
 		a.vehicle.mounted = true
 		a.captureMountCooldownData()
-	} else if r.CooldownMS > 0 {
-		a.captureMountCooldownData()
-		a.startMountCooldownFor(float64(r.CooldownMS) / 1000)
-	} else if a.vehicle.mounted {
-		a.startMountCooldown()
+	} else {
+		if a.wv != nil {
+			a.wv.mountJumping = false
+		}
+		if r.CooldownMS > 0 {
+			a.captureMountCooldownData()
+			a.startMountCooldownFor(float64(r.CooldownMS) / 1000)
+		} else if a.vehicle.mounted {
+			a.startMountCooldown()
+		}
 	}
 }
 
@@ -81,6 +86,9 @@ func (a *App) confirmedMountShape(p []byte) {
 		a.vehicle.mounted = true
 		a.captureMountCooldownData()
 		return
+	}
+	if a.wv != nil {
+		a.wv.mountJumping = false
 	}
 	if a.vehicle.mounted {
 		a.startMountCooldown()

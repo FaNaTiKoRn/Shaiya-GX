@@ -106,6 +106,10 @@ func (a *App) confirmedAnimation(p []byte) {
 		if r.Source == a.state.SelfID {
 			v.requestedSkill = nil
 			v.skillCastUntil = 0
+			if r.Result <= 4 && !(r.Result == 3 && r.Target == 0) {
+				until := a.clock + skillRecoverySeconds(r.ID, r.Level)
+				v.movementActionUntil = max(v.movementActionUntil, until)
+			}
 		}
 		if predicted {
 			if r.Result > 4 || r.Result == 3 && r.Target == 0 {

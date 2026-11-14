@@ -71,6 +71,7 @@ type worldView struct {
 	cameraEye, cameraTarget render.V3
 	firstDirection          render.V3
 	jumping                 bool
+	mountJumping            bool
 	jumpFall                float32
 	jumpFloor               float32
 	controlTime             float64
@@ -422,10 +423,16 @@ func (a *App) updateWorldStep(in *platform.Input, dt float64) {
 	}
 	jumpPressed := in.HasKey(platform.KeySpace)
 	if jumpPressed && !blocked && !swimming && !v.jumping && !v.evading && speed > 0 && !a.state.Self.Dead {
-		v.beginJump()
-		if err := a.world.Send(proto.MotionPacket(proto.MotionJump)); err != nil {
-			a.backToLogin("Unable to send jump.")
-			return
+		if a.state.Self.Mounted {
+			// Mounted riders, including skateboards, keep their riding/skating
+			// clip. Only the vehicle jumps; its animated seat carries the rider.
+			v.mountJumping = true
+		} else {
+			v.beginJump()
+			if err := a.world.Send(proto.MotionPacket(proto.MotionJump)); err != nil {
+				a.backToLogin("Unable to send jump.")
+				return
+			}
 		}
 	}
 	moving := dir.Len() > 0 && speed > 0 && !a.state.Self.Dead
@@ -481,7 +488,7 @@ func (a *App) updateWorldStep(in *platform.Input, dt float64) {
 	}
 	swimming = v.world.SwimmingAt(v.pos[0], v.pos[1], v.pos[2])
 	if v.self != nil {
-		if moving || v.jumping {
+		if moving || v.jumping || v.mountJumping {
 			v.self.CancelCast()
 			cancelGesture(v.self)
 			a.stopCastEffects(a.state.SelfID)
@@ -551,10 +558,12 @@ func (a *App) updateWorldStep(in *platform.Input, dt float64) {
 	}
 	if v.jumping {
 		motion = 4 | proto.MotionFlag80
+	} else if v.mountJumping {
+		motion = proto.MotionFlag80
 	}
 	v.constrainCamera()
 	v.updateRenderedCamera(float32(dt))
-	if moving != v.moving || motion != v.motion || ((moving || v.jumping) && v.sendT <= 0) || (v.waterDirty && (v.sendT <= 0 || (swimming && v.pos[1] >= scene.SwimSurfaceY))) {
+	if moving != v.moving || motion != v.motion || ((moving || v.jumping || v.mountJumping) && v.sendT <= 0) || (v.waterDirty && (v.sendT <= 0 || (swimming && v.pos[1] >= scene.SwimSurfaceY))) {
 		if err := a.world.Send(v.movePacket(motion)); err != nil {
 			a.backToLogin("Unable to send movement.")
 			return
@@ -720,10 +729,13 @@ func (a *App) prepareSelfForDraw() {
 				}
 				if v.selfMount != nil {
 					v.selfMount.SetMovement(v.moving, v.movingBackward)
-					if v.jumping {
+					if v.mountJumping {
 						v.selfMount.SetJumping()
 					}
 					v.selfMount.Update(float32(a.frameDT))
+					if v.mountJumping && !v.selfMount.Jumping() {
+						v.mountJumping = false
+					}
 					v.selfMount.World = render.Basis(v.pos, heading.Scale(-1), render.V3{0, 1, 0})
 					riderPos = v.selfMount.Seat()
 				}

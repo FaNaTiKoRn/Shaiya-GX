@@ -74,6 +74,7 @@ type Session struct {
 	itemAttacking    bool          // m_bItemAttack: casting gem skills
 	lastAutoAttackAt time.Time
 	actionLockUntil  time.Time // authoritative end of the current weapon swing animation
+	skillActionUntil time.Time // authoritative end of the current skill release animation
 	moveCorrectionAt time.Time // bounds correction packets while the client is still predicting movement
 	moveRejectLogAt  time.Time // bounds logs from repeated movement packets during an action lock
 
@@ -255,6 +256,7 @@ func (s *Session) tick(idle bool) {
 				s.dead, s.autoAttack, s.cast = true, false, nil
 				s.lastAutoAttackAt = time.Time{}
 				s.actionLockUntil = time.Time{}
+				s.skillActionUntil = time.Time{}
 				s.clearBuffsOnDeath()
 			}
 		}
@@ -900,8 +902,13 @@ func (s *Session) handleMotion(p []byte) {
 	}
 	motion := p[2]
 	now := time.Now()
+	if s.mounted && motion == MotionJump {
+		s.log.Printf("GX Server World refused rider jump while mounted character_id=%d", s.char.ID)
+		return
+	}
 	lockedCast := s.cast != nil || s.mountCast != nil
-	if lockedCast || (s.actionBlocked() || s.actionLockUntil.After(now)) && motion != MotionSitDown && motion != MotionStandUp {
+	lockedSkillAction := s.skillActionUntil.After(now)
+	if lockedCast || lockedSkillAction || (s.actionBlocked() || s.actionLockUntil.After(now)) && motion != MotionSitDown && motion != MotionStandUp {
 		if s.moveRejectLogAt.IsZero() || now.Sub(s.moveRejectLogAt) >= time.Second {
 			s.log.Printf("GX Server World refused character motion during action character_id=%d motion=%d", s.char.ID, motion)
 			s.moveRejectLogAt = now
@@ -931,6 +938,7 @@ func (s *Session) handleLogout() {
 	s.mountCast, s.mountCastDuration = nil, 0
 	s.mountCooldownUntil, s.mountedMountUID, s.mountedReuse = time.Time{}, 0, 0
 	s.actionLockUntil = time.Time{}
+	s.skillActionUntil = time.Time{}
 	s.moveCorrectionAt, s.moveRejectLogAt = time.Time{}, time.Time{}
 	s.items, s.skills, s.quickSlots, s.stored, s.points = nil, nil, nil, nil, 0
 	s.send(buildLeaveWorldAck(id), "0x0107 leave world ack")
