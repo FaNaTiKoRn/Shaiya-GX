@@ -233,7 +233,16 @@ func isOneHandReal(rt uint8) bool { return rt == 1 || rt == 3 || rt == 7 || rt =
 // weapons against shields, race (Items.Country), class, mode (Items.Grow)
 // and the sex-only items (Special 64/65).
 func canEquip(ch *db.Character, def *db.ItemDef, slot uint8, items []db.Item) bool {
-	if def == nil || ch.Level < def.ReqLevel {
+	if def == nil {
+		return false
+	}
+	// Vehicle mounts are the level-1, race-neutral test item requested for
+	// GX. Their source rows retain legacy level/country/class restrictions,
+	// but the dedicated mount equipment slot accepts any Type 42 item.
+	if slot == mountSlot {
+		return def.Type == mountItemType
+	}
+	if ch.Level < def.ReqLevel {
 		return false
 	}
 	rt := realType(def.Type)
@@ -256,10 +265,6 @@ func canEquip(ch *db.Character, def *db.ItemDef, slot uint8, items []db.Item) bo
 			return false
 		}
 		if w, weapon := equippedReal(5); weapon && !isOneHandReal(w) {
-			return false
-		}
-	case slot == 13:
-		if def.Type != mountItemType {
 			return false
 		}
 	case ok && int(rt) != want:

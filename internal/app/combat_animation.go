@@ -31,6 +31,28 @@ func (a *App) playerWeapon(id uint32) uint8 {
 	return 0
 }
 
+// weaponSwingDuration mirrors the server's AttackTime table. CharacterSpeed
+// already carries the server-resolved index, including attack-speed effects.
+func (a *App) weaponSwingDuration() float64 {
+	if a.state == nil {
+		return 0
+	}
+	weapon := a.state.Inventory[[2]uint8{0, 5}]
+	def := a.itemsItem(weapon.Type, weapon.TypeID)
+	if def == nil {
+		return 0
+	}
+	attackTime := int(min(def.AttackTime, 10))
+	if a.state.Self.Speed != nil && a.state.Self.Speed.Attack <= 9 {
+		attackTime = int(a.state.Self.Speed.Attack) + 1
+	}
+	delays := [...]float64{0, 4, 3, 2.75, 2.5, 2.25, 2, 1.75, 1.5, 1.25, 1}
+	if attackTime < 1 || attackTime >= len(delays) {
+		return 0
+	}
+	return delays[attackTime]
+}
+
 // confirmedAnimation presents network outcomes; it never changes health.
 func (a *App) confirmedAnimation(p []byte) {
 	op := proto.Op(p)
@@ -55,27 +77,40 @@ func (a *App) confirmedAnimation(p []byte) {
 		}
 	case proto.SkillCastStarted:
 		r := a.state.LastCast
+		a.loadSkills()
+		d := a.skillDefs[sdata.SkillKey{ID: r.ID, Level: r.Level}]
+		seconds := float32(d.ReadyTime) * .25
+		if r.MountCastSeconds > 0 {
+			seconds = float32(r.MountCastSeconds)
+		}
 		// The server may require preparation even when local SData says
 		// instant. Its cast-start supersedes the predicted release and clock.
 		if r.Source == a.state.SelfID {
 			v.requestedSkill = nil
+			v.movementActionID = 0
+			v.movementActionUntil = 0
+			if seconds > 0 {
+				v.skillCastUntil = a.clock + float64(seconds)
+			}
 		}
 
 		if actor := a.playerActor(r.Source); actor != nil {
-			a.loadSkills()
-			d := a.skillDefs[sdata.SkillKey{ID: r.ID, Level: r.Level}]
 			a.faceSkillTarget(r.Source, r.Target)
-			actor.PlayCast(scene.SkillCastAction(d.Animation, d.Effect), float32(d.ReadyTime)*.25)
+			if actor.PlayCast(scene.SkillCastAction(d.Animation, d.Effect), seconds) && r.Source == a.state.SelfID {
+				v.movementActionID = actor.ActionID()
+			}
 		}
 	case proto.SkillUse, proto.SkillUseNoTarget, proto.SkillUserDrain, proto.SkillMobDrain:
 		r := a.state.LastSkill
 		predicted := a.matchingRequestedSkill(r)
 		if r.Source == a.state.SelfID {
 			v.requestedSkill = nil
+			v.skillCastUntil = 0
 		}
 		if predicted {
 			if r.Result > 4 || r.Result == 3 && r.Target == 0 {
 				a.wv.self.ReleaseAction()
+				v.movementActionID = 0
 			} else {
 				return
 			}
@@ -95,11 +130,15 @@ func (a *App) confirmedAnimation(p []byte) {
 			weapon := a.playerWeapon(r.Source)
 			a.faceSkillTarget(r.Source, r.Target)
 			a.attackVariant++
-			actor.PlayAction(scene.SkillAction(d.Animation, d.Attack, d.Effect, weapon, a.attackVariant), false)
+			if actor.PlayAction(scene.SkillAction(d.Animation, d.Attack, d.Effect, weapon, a.attackVariant), false) && r.Source == a.state.SelfID {
+				v.movementActionID = actor.ActionID()
+			}
 		}
 	case proto.CharacterMove:
 		if actor := a.playerActor(proto.NewReader(p).U32()); actor != nil {
-			actor.CancelCast()
+			if actor != v.self || !actor.CastActive() {
+				actor.CancelCast()
+			}
 			if move, err := proto.DecodeUserMove(p); err == nil && move.Motion&0x3f != 0 {
 				cancelGesture(actor)
 			}
@@ -118,6 +157,10 @@ func (a *App) confirmedAnimation(p []byte) {
 			}
 			a.attackVariant++
 			if actor.PlayAction(scene.AttackAction(typ, a.attackVariant), false) {
+				if result.Source == a.state.SelfID {
+					v.movementActionID = actor.ActionID()
+					v.movementActionUntil = max(v.movementActionUntil, a.clock+a.weaponSwingDuration())
+				}
 				a.queueAttackSounds(result, typ, actor)
 			}
 		}

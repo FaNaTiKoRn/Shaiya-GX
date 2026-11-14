@@ -169,7 +169,10 @@ func (a *App) prepareRemotePlayers() {
 				}
 			}
 			if cached.mount != nil {
-				cached.mount.SetMoving(moving)
+				cached.mount.SetMovement(moving, moving && e.Motion&0x3f == 2)
+				if e.Motion&proto.MotionFlag80 != 0 {
+					cached.mount.SetJumping()
+				}
 				cached.mount.Update(float32(a.frameDT))
 				cached.mount.World = render.Basis(pos, fwd.Scale(-1), render.V3{0, 1, 0})
 				pos = cached.mount.Seat()

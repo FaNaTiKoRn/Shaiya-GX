@@ -227,6 +227,7 @@ func (s *Session) handleUseSkill(op packet.Opcode, p []byte) {
 		}
 		pos = &[2]float32{mob.PosX, mob.PosZ}
 	}
+	s.autoAttack, s.autoAttackTarget, s.autoAttackUser = false, 0, false
 	s.send(packet.New(packet.AutoAttackStop).MustFinish(), "0x0212 auto attack stop (casting)")
 	w := packet.New(packet.SkillCastStarted)
 	w.U32(ch.ID)

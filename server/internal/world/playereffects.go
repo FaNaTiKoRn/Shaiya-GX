@@ -87,8 +87,11 @@ func (s *Session) blocks() (actionA, move, actionB int) {
 	return
 }
 
-// actionBlocked: no attacks or skills while stunned or asleep.
+// actionBlocked: no attacks or skills while stunned, asleep, casting or mounting.
 func (s *Session) actionBlocked() bool {
+	if s.cast != nil || s.mountCast != nil {
+		return true
+	}
 	a, _, b := s.blocks()
 	return a > 0 || b > 0
 }
@@ -223,6 +226,7 @@ func (s *Session) tickDebuffs(now time.Time) bool {
 				s.afterMobDamage(pendingDamage{MobGlobalID: b.CasterMob}, true)
 			}
 			s.dead, s.autoAttack, s.cast = true, false, nil
+			s.actionLockUntil = time.Time{}
 			s.clearBuffsOnDeath()
 			return true
 		}

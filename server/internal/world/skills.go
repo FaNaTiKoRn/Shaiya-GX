@@ -1,7 +1,9 @@
 package world
 
 import (
+	"fmt"
 	"sort"
+	"time"
 
 	"github.com/Spelunkern/Shaiya-GX/server/internal/db"
 	"github.com/Spelunkern/Shaiya-GX/server/internal/packet"
@@ -17,6 +19,11 @@ const (
 	mountItemType  = 42
 	unmountedShape = 0x00
 )
+
+type pendingMountCast struct {
+	readyAt  time.Time
+	mountUID int64
+}
 
 func buildCharacterSkills(skills []db.CharacterSkill) []byte {
 	w := packet.New(packet.CharacterSkills)
@@ -263,50 +270,203 @@ func (s *Session) handleSetStatPoint(p []byte) {
 
 // handleUseVehicle (0x0216) toggles the mount equipped in slot 13.
 func (s *Session) handleUseVehicle() {
-	ch := s.char
-	if ch == nil {
+	if s.char == nil {
 		return
 	}
-	reply := func(ok, on bool) []byte {
-		w := packet.New(packet.UseVehicle)
-		w.Bool(ok)
-		w.Bool(on)
-		return w.MustFinish()
+	message := s.startMountAction(s.mountCastDuration, "0x0216 use vehicle", true)
+	if message != "" {
+		s.commandReply(message)
 	}
-	// vertical_combat_vehicle_prefix: a slot-13 mount (not while in the
-	// transform shapes 10-12); its shape is the item's Range r as r*2
-	// below 2, else r+7. A refusal answers 0x0216 (0, 1).
-	next := !s.mounted
-	shape := uint8(unmountedShape)
-	if next {
-		m := equippedItem(s.items, mountSlot)
-		var d *db.ItemDef
-		if m != nil {
-			d = db.MustDefs().Item(m.Type, m.TypeID)
+}
+
+// startMountAction is shared by the vehicle key and the admin chat command.
+// The server owns the cast deadline and the item-specific reuse timer.
+func (s *Session) startMountAction(castDuration time.Duration, label string, acknowledge bool) string {
+	if s.char == nil {
+		return ""
+	}
+	if s.mounted {
+		reuseSeconds := int64(s.mountedReuse / time.Second)
+		s.setMountState(false, unmountedShape, label)
+		if reuseSeconds > 0 {
+			return fmt.Sprintf("Desmontado. Esta montura queda en recarga durante %d s.", reuseSeconds)
 		}
-		if m == nil || m.Type != mountItemType || d == nil {
-			s.send(reply(false, true), "0x0216 use vehicle rejected")
-			return
+		return "Desmontado."
+	}
+	if s.mountCast != nil {
+		if acknowledge {
+			s.send(buildUseVehicleReply(false, false), label+" rejected during mount cast")
 		}
-		r := uint8(max(d.Range, 0))
-		if r < 2 {
-			shape = r * 2
-		} else {
-			shape = r + 7
+		return "Ya hay un casteo de montura en curso."
+	}
+	mount, def, ok := s.equippedMountDefinition()
+	if !ok {
+		if acknowledge {
+			s.send(buildUseVehicleReply(false, false), label+" rejected: no mount equipped")
+		}
+		return "Equipa una montura en el slot 13 antes de invocarla."
+	}
+	if remaining := s.mountCooldownRemaining(time.Now()); remaining > 0 {
+		if acknowledge {
+			s.send(buildUseVehicleReply(false, false, durationMilliseconds(remaining)), label+" rejected: mount cooldown")
+		}
+		seconds := int64((remaining + time.Second - 1) / time.Second)
+		return fmt.Sprintf("Esta montura sigue en recarga: %d s.", seconds)
+	}
+	now := time.Now()
+	if s.cast != nil || s.actionLockUntil.After(now) || s.actionBlocked() {
+		if acknowledge {
+			s.send(buildUseVehicleReply(false, false), label+" rejected during another action")
+		}
+		return "No se puede iniciar la montura mientras hay otra accion en curso."
+	}
+	shape := mountShape(def.Range)
+	if castDuration <= 0 {
+		s.autoAttack, s.autoAttackTarget, s.autoAttackUser = false, 0, false
+		s.send(packet.New(packet.AutoAttackStop).MustFinish(), "0x0212 auto attack stop (mount)")
+		s.setMountState(true, shape, label)
+		return "Montura activada."
+	}
+	s.autoAttack = false
+	s.mountCast = &pendingMountCast{readyAt: now.Add(castDuration), mountUID: mount.UID}
+	s.send(packet.New(packet.AutoAttackStop).MustFinish(), "0x0212 auto attack stop (mount cast)")
+	s.broadcastNear(buildMountCastStarted(s.char.ID, uint32(castDuration/time.Second)), "0x0510 mount cast started", true)
+	if acknowledge {
+		// Confirm the request without making the client think it is mounted.
+		s.send(buildUseVehicleReply(true, false), label+" mount cast accepted")
+	}
+	s.log.Printf("GX Server World mount cast started character_id=%d item_uid=%d cast_time=%s reuse_seconds=%d", s.char.ID, mount.UID, castDuration, def.ReqIg)
+	return fmt.Sprintf("Casteo de montura iniciado durante %d s.", int64(castDuration/time.Second))
+}
+
+func buildUseVehicleReply(ok, on bool, cooldownMS ...uint32) []byte {
+	w := packet.New(packet.UseVehicle)
+	w.Bool(ok)
+	w.Bool(on)
+	if len(cooldownMS) != 0 {
+		w.U32(cooldownMS[0])
+	}
+	return w.MustFinish()
+}
+
+func durationMilliseconds(d time.Duration) uint32 {
+	if d <= 0 {
+		return 0
+	}
+	return uint32(d / time.Millisecond)
+}
+
+func buildMountCastStarted(characterID uint32, seconds uint32) []byte {
+	w := packet.New(packet.SkillCastStarted)
+	w.U32(characterID)
+	w.U32(characterID)
+	w.U16(43) // Detection: visual-only cast animation in the bundled EP5 Skill.SData.
+	w.U8(1)
+	w.U32(seconds) // GX extension keeps the animation aligned with the server deadline.
+	return w.MustFinish()
+}
+
+func (s *Session) equippedMountShape() (uint8, bool) {
+	_, d, ok := s.equippedMountDefinition()
+	if !ok {
+		return 0, false
+	}
+	return mountShape(d.Range), true
+}
+
+func mountShape(rangeValue int16) uint8 {
+	r := uint8(max(rangeValue, 0))
+	if r < 2 {
+		return r * 2
+	}
+	return r + 7
+}
+
+func (s *Session) equippedMountDefinition() (*db.Item, *db.ItemDef, bool) {
+	m := equippedItem(s.items, mountSlot)
+	if m == nil || m.Type != mountItemType {
+		return nil, nil, false
+	}
+	d := db.MustDefs().Item(m.Type, m.TypeID)
+	if d == nil {
+		return nil, nil, false
+	}
+	return m, d, true
+}
+
+func (s *Session) mountCooldownRemaining(now time.Time) time.Duration {
+	if !s.mountCooldownUntil.After(now) {
+		s.mountCooldownUntil = time.Time{}
+		return 0
+	}
+	return s.mountCooldownUntil.Sub(now)
+}
+
+func (s *Session) startMountedItemCooldown(now time.Time) time.Duration {
+	remaining := s.mountCooldownRemaining(now)
+	if remaining > 0 {
+		s.mountedMountUID, s.mountedReuse = 0, 0
+		return remaining
+	}
+	duration := s.mountedReuse
+	if s.mountedReuse > 0 {
+		s.mountCooldownUntil = now.Add(s.mountedReuse)
+		s.log.Printf("GX Server World mount-slot cooldown started character_id=%d item_uid=%d duration=%s", s.char.ID, s.mountedMountUID, s.mountedReuse)
+	}
+	s.mountedMountUID, s.mountedReuse = 0, 0
+	return duration
+}
+
+func (s *Session) setMountState(mounted bool, shape uint8, label string) {
+	if s.char == nil {
+		return
+	}
+	var cooldown time.Duration
+	if !mounted && s.mounted {
+		cooldown = s.startMountedItemCooldown(time.Now())
+	}
+	if mounted {
+		if item, def, ok := s.equippedMountDefinition(); ok {
+			s.mountedMountUID = item.UID
+			s.mountedReuse = time.Duration(def.ReqIg) * time.Second
 		}
 	}
-	s.mounted = next
-	s.send(reply(true, true), "0x0216 use vehicle")
+	s.mounted = mounted
+	s.send(buildUseVehicleReply(true, mounted, durationMilliseconds(cooldown)), label)
 	if s.player != nil {
 		s.player.setMountShape(shape)
 	}
 	w := packet.New(packet.CharacterMountShape)
-	w.U32(ch.ID)
+	w.U32(s.char.ID)
 	w.U8(shape)
 	frame := w.MustFinish()
 	s.send(frame, "0x051D character mount shape")
 	s.sendToViewers(frame, "0x051D character mount shape")
-	s.log.Printf("GX Server World character_id=%d mounted=%t", ch.ID, next)
+	s.log.Printf("GX Server World character_id=%d mounted=%t", s.char.ID, mounted)
+}
+
+func (s *Session) processPendingMountCast(now time.Time) {
+	pending := s.mountCast
+	if pending == nil {
+		return
+	}
+	if s.dead || s.char == nil {
+		s.mountCast = nil
+		return
+	}
+	if pending.readyAt.After(now) {
+		return
+	}
+	s.mountCast = nil
+	item, def, ok := s.equippedMountDefinition()
+	if !ok || item.UID != pending.mountUID {
+		s.send(buildUseVehicleReply(false, false), "0x0216 mount cast failed: mount changed")
+		s.log.Printf("GX Server World mount cast failed character_id=%d reason=mount_changed", s.char.ID)
+		s.commandReply("Casteo cancelado: la montura equipada cambio durante la preparacion.")
+		return
+	}
+	shape := mountShape(def.Range)
+	s.setMountState(true, shape, "0x0216 mount cast complete")
 }
 
 // dismount is StatusCastingStop's vehicle cancel: a hit takes the rider
@@ -315,9 +475,11 @@ func (s *Session) dismount() {
 	if !s.mounted || s.char == nil {
 		return
 	}
+	cooldown := s.startMountedItemCooldown(time.Now())
 	s.mounted = false
+	s.send(buildUseVehicleReply(true, false, durationMilliseconds(cooldown)), "0x0216 dismounted by a hit")
 	if s.player != nil {
-		s.player.setMountShape(0)
+		s.player.setMountShape(unmountedShape)
 	}
 	w := packet.New(packet.CharacterMountShape)
 	w.U32(s.char.ID)

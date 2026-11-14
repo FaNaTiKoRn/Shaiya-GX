@@ -630,3 +630,9 @@ func (c *Character) CastTiming() (remaining, total float32, active bool) {
 	}
 	return c.castLeft, c.castTotal, true
 }
+
+// CastActive reports whether a server-started cast is holding the actor in
+// its preparation animation.
+func (c *Character) CastActive() bool {
+	return c != nil && c.castLeft > 0
+}

@@ -42,6 +42,24 @@ func (s *Session) handleChat(op packet.Opcode, p []byte) {
 	if err != nil {
 		return
 	}
+	castDuration, isMount, validMountCommand := parseMountCommand(msg)
+	if isMount {
+		if !validMountCommand {
+			s.commandReply("Uso: /mount [segundos]. Usa /mount 0 para montaje instantaneo.")
+			return
+		}
+		s.executeMountCommand(castDuration)
+		return
+	}
+	itemType, typeID, isGetItem, validGetItem := parseGetItemCommand(msg)
+	if isGetItem {
+		if !validGetItem {
+			s.commandReply("Uso: /getitem <tipo> <id>. Ejemplo: /getitem 42 2")
+			return
+		}
+		s.executeGetItemCommand(itemType, typeID)
+		return
+	}
 	if isTownCommand(msg) {
 		s.executeTown()
 		return

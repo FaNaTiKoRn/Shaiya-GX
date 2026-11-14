@@ -797,6 +797,7 @@ func (a *App) pumpWorld() {
 			if a.state == nil {
 				return
 			}
+			a.confirmedMountShape(p)
 			a.confirmedItems(ev.Op)
 			a.confirmedSystemChat(p, previousMoney)
 			a.confirmedPickup(p)

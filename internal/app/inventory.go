@@ -80,7 +80,11 @@ func (a *App) updateInventory(in *platform.Input, w, h int) bool {
 	v.hover, v.hovered = ui.InventoryHit(in.MouseX-x, in.MouseY-y, v.bag)
 	// Clicking uses an item; dragging keeps native bag positions authoritative.
 	if in.RightPressed && v.hovered && !a.state.Self.Dead {
-		a.equipInventoryItem(v.hover)
+		if v.hover[0] == 0 {
+			a.unequipInventoryItem(v.hover[1])
+		} else {
+			a.equipInventoryItem(v.hover)
+		}
 		return true
 	}
 	if in.Pressed && v.hovered && !a.state.Self.Dead {
@@ -123,7 +127,7 @@ func (a *App) drawInventory(w, h int) {
 	}
 	x, y := a.inventoryUI.Origin(w, h)
 	a.clearTooltipUnderPanel(x, y, ui.InventoryWidth, ui.InventoryHeight)
-	a.inventoryUI.Draw(a.sprites, a.font, w, h, v.bag, a.state.Details.Money, "")
+	a.inventoryUI.Draw(a.sprites, a.font, w, h, v.bag, a.state.Details.Money, v.message)
 
 	a.drawInventoryPreview(w, h)
 	for key, it := range a.state.Inventory {
@@ -140,7 +144,7 @@ func (a *App) drawInventory(w, h int) {
 		}
 		if d := a.itemsItem(it.Type, it.TypeID); d != nil {
 			a.drawItemIcon(d, cx, cy, size, white)
-			a.drawItemCooldown(it, cx, cy, size)
+			a.drawItemCooldown(it, key, cx, cy, size)
 		}
 		if it.Count > 1 {
 			text := fmt.Sprint(it.Count)
@@ -185,7 +189,7 @@ func (a *App) useInventoryItem(key [2]uint8) {
 		a.requestVehicle()
 		return
 	}
-	if a.openAppearanceEditor(key) || a.itemCooldown(it) > 0 {
+	if a.openAppearanceEditor(key) || a.itemCooldown(it, key) > 0 {
 		return
 	}
 	if err := a.world.Send(proto.UseItemPacket(key[0], key[1])); err != nil {
@@ -223,6 +227,33 @@ func (a *App) equipInventoryItem(key [2]uint8) {
 	a.inventory.selected, a.inventory.dragging = false, false
 	a.inventory.pending, a.inventory.deadline = true, a.clock+10
 }
+
+func (a *App) unequipInventoryItem(equipSlot uint8) {
+	if a.state == nil || a.world == nil || a.state.Self.Dead || a.inventory.pending || a.shop.pending {
+		return
+	}
+	if _, ok := a.state.Inventory[[2]uint8{0, equipSlot}]; !ok {
+		return
+	}
+	for bag := uint8(1); bag <= 5; bag++ {
+		for slot := uint8(0); slot < 24; slot++ {
+			key := [2]uint8{bag, slot}
+			if item, occupied := a.state.Inventory[key]; occupied && item.Type != 0 {
+				continue
+			}
+			if err := a.world.Send(proto.ItemMovePacket(0, equipSlot, bag, slot)); err != nil {
+				a.backToLogin("Unable to unequip item.")
+				return
+			}
+			a.inventory.selected, a.inventory.dragging = false, false
+			a.inventory.pending, a.inventory.deadline = true, a.clock+10
+			a.inventory.message = ""
+			return
+		}
+	}
+	a.inventory.message = "No hay espacio en inventario"
+}
+
 func inventoryEquipSlots(typ uint8) []uint8 {
 	if effect.WeaponFamily(typ) != 0 {
 		return []uint8{5}

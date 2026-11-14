@@ -35,6 +35,15 @@ func weaponAttackDelay(attackTime uint8) (time.Duration, bool) {
 	return time.Duration(table[attackTime]) * time.Millisecond, true
 }
 
+// startWeaponSwing records both the next-swing cadence and the authoritative
+// movement lock for this animation. This is AttackTime recovery, not a skill
+// cooldown; the client cannot move the character before the server deadline.
+func (s *Session) startWeaponSwing(delay time.Duration) {
+	now := time.Now()
+	s.lastAutoAttackAt, s.lastCombatAt = now, now
+	s.actionLockUntil = now.Add(delay)
+}
+
 func equippedWeaponCombat(items []db.Item) (weaponCombat, bool) {
 	w := equippedItem(items, weaponSlot)
 	if w == nil {
@@ -121,7 +130,7 @@ func (s *Session) autoAttackSwing(target uint32) bool {
 	if stats.Disabled[kind] > 0 {
 		return true // the category is disabled (abilities 32-34); wait it out
 	}
-	s.lastAutoAttackAt, s.lastCombatAt = time.Now(), time.Now()
+	s.startWeaponSwing(wc.Delay)
 	SetMobAggro(ch.MapID, target, ch.ID)
 	// CUser::AttackSuccess, then CUser::AttackDamage; 0x0503 result is
 	// 0 normal, 1 critical, 3 miss.

@@ -50,6 +50,9 @@ func (a *App) confirmedEffects(p []byte) {
 		if d.ReadyTime > 0 {
 			until = a.clock + float64(d.ReadyTime)*.25
 		}
+		if r.MountCastSeconds > 0 {
+			until = a.clock + float64(r.MountCastSeconds)
+		}
 		for hand := 0; hand < 2; hand++ {
 			x := a.loadSkillEffect(file, 1)
 			if x == nil {

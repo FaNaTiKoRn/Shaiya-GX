@@ -313,7 +313,7 @@ func (s *Session) userAttackSwing(target uint32) bool {
 	if stats.Disabled[kind] > 0 {
 		return true
 	}
-	s.lastAutoAttackAt, s.lastCombatAt = time.Now(), time.Now()
+	s.startWeaponSwing(wc.Delay)
 	p.QueueUserHit(pendingUserHit{AttackerID: ch.ID, Stats: stats, Kind: kind, X: ch.PosX, Z: ch.PosZ})
 	return true
 }
@@ -330,6 +330,7 @@ func (s *Session) tickUserHits() {
 		if s.applyUserHit(h) {
 			s.dead, s.autoAttack, s.cast = true, false, nil
 			s.lastAutoAttackAt = time.Time{}
+			s.actionLockUntil = time.Time{}
 			s.clearBuffsOnDeath()
 		}
 	}

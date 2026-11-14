@@ -98,6 +98,9 @@ func (v *Inventory) Draw(s *render.Sprites, f *Font, w, h int, bag uint8, money 
 	}
 	v.close.OriginX, v.close.OriginY = x, y
 	v.close.Draw(s)
+	if message != "" {
+		f.Draw(s, message, x+14, y+436, [4]float32{1, .35, .3, 1}, 104)
+	}
 	text := GoldText(money)
 	f.Draw(s, text, x+220-f.Width(text), y+460, goldTint(money), 110)
 }

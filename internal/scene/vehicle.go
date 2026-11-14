@@ -2,6 +2,9 @@ package scene
 
 import (
 	"fmt"
+	"path"
+	"strings"
+
 	"github.com/Spelunkern/Shaiya-GX/internal/data/model"
 	"github.com/Spelunkern/Shaiya-GX/internal/render"
 )
@@ -13,6 +16,9 @@ type Vehicle struct {
 	*CreatureActor
 	seatBone int
 	board    bool
+	moving   bool
+	backward bool
+	jumping  bool
 }
 
 // These native MON records are the standing board variants.
@@ -58,16 +64,56 @@ func (s *Assets) BuildVehicle(race, shape uint8) (*Vehicle, error) {
 	return &Vehicle{CreatureActor: actor, seatBone: bone, board: VehicleAlternate(shape)}, nil
 }
 
-func (v *Vehicle) SetMoving(moving bool) {
-	if v == nil {
+func (v *Vehicle) SetMoving(moving bool) { v.SetMovement(moving, false) }
+
+// SetMovement selects walk for reverse input and run for forward input.
+func (v *Vehicle) SetMovement(moving, backward bool) {
+	if v == nil || v.CreatureActor == nil {
+		return
+	}
+	v.moving, v.backward = moving, backward && moving
+	if v.jumping {
 		return
 	}
 	action := 8
 	if moving {
-		action = 1
+		action = 1 // run
+		if v.backward {
+			action = 0 // native mount walk
+		}
 	}
 	if err := v.SetAction(action); err != nil {
 		v.assets.Missing[err.Error()] = true
+	}
+}
+
+// SetJumping starts the mount's own ANI when that vehicle model has one.
+// The rider remains on its regular riding pose while the mount leaves ground.
+func (v *Vehicle) SetJumping() {
+	if v == nil || v.CreatureActor == nil || v.jumping || len(v.visual.Animations) < 2 {
+		return
+	}
+	base := strings.TrimSuffix(path.Base(v.visual.Animations[1]), path.Ext(v.visual.Animations[1]))
+	base = strings.TrimSuffix(base, "_run")
+	file := "Vehicle/ANI/" + base + "_jump.ANI"
+	clip, err := v.assets.Clip(file)
+	if err != nil {
+		v.assets.Missing[err.Error()] = true
+		return
+	}
+	v.clip, v.clipName, v.Time, v.action = clip, file, 0, -2
+	v.cueTime = 0
+	v.jumping = true
+}
+
+func (v *Vehicle) Update(dt float32) {
+	if v == nil || v.CreatureActor == nil {
+		return
+	}
+	v.CreatureActor.Update(dt)
+	if v.jumping && v.clip != nil && v.clip.Duration() > 0 && v.Time >= v.clip.Duration() {
+		v.jumping = false
+		v.SetMovement(v.moving, v.backward)
 	}
 }
 

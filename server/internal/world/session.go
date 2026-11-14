@@ -51,15 +51,20 @@ type Session struct {
 	points     uint32
 	player     *ConnectedPlayer
 
-	itemCooldowns  map[uint8]time.Time
-	skillCooldowns map[uint16]time.Time
-	buffs          []ActiveBuff
-	cast           *pendingCast
-	mounted        bool
-	dead           bool
-	deathLoss      int       // CUser::Death exp-loss percent, kept until revive
-	rebirthAt      time.Time // UpdateRebirth deadline while dead
-	rebirthParty   bool      // 0x0553 mode 3 waiting for the party leader
+	itemCooldowns      map[uint8]time.Time
+	skillCooldowns     map[uint16]time.Time
+	buffs              []ActiveBuff
+	cast               *pendingCast
+	mountCast          *pendingMountCast
+	mountCastDuration  time.Duration
+	mountCooldownUntil time.Time
+	mountedMountUID    int64
+	mountedReuse       time.Duration
+	mounted            bool
+	dead               bool
+	deathLoss          int       // CUser::Death exp-loss percent, kept until revive
+	rebirthAt          time.Time // UpdateRebirth deadline while dead
+	rebirthParty       bool      // 0x0553 mode 3 waiting for the party leader
 
 	autoAttack       bool
 	autoAttackTarget uint32
@@ -68,6 +73,9 @@ type Session struct {
 	duelDeathMark    bool          // the last death was a lost duel (m_nVehicleStatus -1)
 	itemAttacking    bool          // m_bItemAttack: casting gem skills
 	lastAutoAttackAt time.Time
+	actionLockUntil  time.Time // authoritative end of the current weapon swing animation
+	moveCorrectionAt time.Time // bounds correction packets while the client is still predicting movement
+	moveRejectLogAt  time.Time // bounds logs from repeated movement packets during an action lock
 
 	positionDirty    bool
 	lastPositionSave time.Time
@@ -246,6 +254,7 @@ func (s *Session) tick(idle bool) {
 			if s.applyIncomingMobDamage(d) {
 				s.dead, s.autoAttack, s.cast = true, false, nil
 				s.lastAutoAttackAt = time.Time{}
+				s.actionLockUntil = time.Time{}
 				s.clearBuffsOnDeath()
 			}
 		}
@@ -280,6 +289,7 @@ func (s *Session) tick(idle bool) {
 		s.syncQuestIDs()
 	}
 	s.processPendingCast()
+	s.processPendingMountCast(time.Now())
 	if idle && s.autoAttack {
 		swing := s.autoAttackSwing
 		if s.autoAttackUser {
@@ -600,8 +610,10 @@ func (s *Session) dispatch(op packet.Opcode, p []byte) {
 			s.handleTradeConfirm(p[2] != 0)
 		}
 	case packet.CharacterMove:
-		// Any movement interrupts a cast and the auto-attack.
-		s.cast, s.autoAttack = nil, false
+		// Movement always stops auto-attack. A cast is server-owned and must
+		// survive movement attempts; handleCharacterMove rejects them until
+		// the cast deadline rather than letting the client cancel the lock.
+		s.autoAttack = false
 		s.handleCharacterMove(p)
 	case packet.CharacterMotion:
 		s.handleMotion(p)
@@ -887,6 +899,15 @@ func (s *Session) handleMotion(p []byte) {
 		return
 	}
 	motion := p[2]
+	now := time.Now()
+	lockedCast := s.cast != nil || s.mountCast != nil
+	if lockedCast || (s.actionBlocked() || s.actionLockUntil.After(now)) && motion != MotionSitDown && motion != MotionStandUp {
+		if s.moveRejectLogAt.IsZero() || now.Sub(s.moveRejectLogAt) >= time.Second {
+			s.log.Printf("GX Server World refused character motion during action character_id=%d motion=%d", s.char.ID, motion)
+			s.moveRejectLogAt = now
+		}
+		return
+	}
 	if s.player != nil {
 		switch motion {
 		case MotionSitDown:
@@ -907,6 +928,10 @@ func (s *Session) handleLogout() {
 	}
 	s.leaveWorld()
 	s.buffs, s.cast, s.mounted, s.dead, s.autoAttack = nil, nil, false, false, false
+	s.mountCast, s.mountCastDuration = nil, 0
+	s.mountCooldownUntil, s.mountedMountUID, s.mountedReuse = time.Time{}, 0, 0
+	s.actionLockUntil = time.Time{}
+	s.moveCorrectionAt, s.moveRejectLogAt = time.Time{}, time.Time{}
 	s.items, s.skills, s.quickSlots, s.stored, s.points = nil, nil, nil, nil, 0
 	s.send(buildLeaveWorldAck(id), "0x0107 leave world ack")
 	s.expanded = false

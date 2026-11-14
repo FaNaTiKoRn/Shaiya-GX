@@ -153,6 +153,7 @@ func (s *Session) sacrifice() {
 		guildDuelLeave(s.player, nil, 3)
 	}
 	s.dead, s.autoAttack, s.cast = true, false, nil
+	s.actionLockUntil = time.Time{}
 	s.clearBuffsOnDeath()
 	s.log.Printf("GX Server World character sacrificed itself character_id=%d", ch.ID)
 }

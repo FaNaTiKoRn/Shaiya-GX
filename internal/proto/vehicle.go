@@ -2,11 +2,17 @@ package proto
 
 import "fmt"
 
-type VehicleResult struct{ Result, On uint8 }
+type VehicleResult struct {
+	Result, On uint8
+	CooldownMS uint32 // optional GX mount-cooldown extension
+}
 
 func DecodeVehicleResult(p []byte) (VehicleResult, error) {
 	r := NewReader(p)
 	v := VehicleResult{Result: r.U8(), On: r.U8()}
+	if r.Remaining() >= 4 {
+		v.CooldownMS = r.U32()
+	}
 	if err := r.Err(); err != nil {
 		return v, err
 	}

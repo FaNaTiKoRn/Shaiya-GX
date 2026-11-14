@@ -17,6 +17,9 @@ import (
 // movement; Phoenix tools/reference/ep5_camera_controls.md).
 type worldView struct {
 	requestedSkill          *requestedSkillPresentation
+	movementActionID        uint64
+	movementActionUntil     float64
+	skillCastUntil          float64
 	releaseEffects          []skillRelease
 	death                   deathView
 	localActions            [ui.TotalActionSlots]uint8 // zero means empty; otherwise panel index + 1
@@ -51,6 +54,7 @@ type worldView struct {
 	eye                     render.V3 // desired eye; follows the position delta
 	moving                  bool
 	walking                 bool
+	movingBackward          bool
 	autoRun                 bool
 	travel                  bool
 	approachTarget          uint32
@@ -99,6 +103,19 @@ type worldView struct {
 	groundBatches           [4][]render.M4
 	groundColors            [4][][4]float32
 	groundStart             map[uint32]float64
+}
+
+// movementActionLocked keeps local movement prediction stopped through the
+// server-started cast and its confirmed release animation.
+func (a *App) movementActionLocked() bool {
+	v := a.wv
+	if v == nil || v.self == nil {
+		return false
+	}
+	if v.skillCastUntil > a.clock || v.self.CastActive() {
+		return true
+	}
+	return v.movementActionUntil > a.clock || v.movementActionID != 0 && v.self.ActionID() == v.movementActionID && v.self.ActionActive()
 }
 
 const (
@@ -288,7 +305,8 @@ func (a *App) updateWorldStep(in *platform.Input, dt float64) {
 	if !a.updateActionApproach(in) {
 		return
 	}
-	if !in.SuppressAutoRun && (intent.forward || intent.back || intent.side != 0 || intent.turn != 0 || in.RightDown) {
+	fixedHeading := v.travel || v.approachTarget != 0 || v.approachNPC || v.approachLoot || v.combatHeading.Len() > 0
+	if !in.SuppressAutoRun && (intent.forward || intent.back || intent.side != 0 || intent.turn != 0 || in.RightDown && !fixedHeading) {
 		v.restoreMovementHeading()
 	}
 	var dir render.V3
@@ -329,8 +347,13 @@ func (a *App) updateWorldStep(in *platform.Input, dt float64) {
 		}
 	}
 	blocked := a.state.Self.Sitting || v.sitPending || v.self != nil && v.self.PlayingAction(11)
+	blocked = blocked || a.movementActionLocked()
 	if blocked {
 		dir = render.V3{}
+		v.jumping, v.evading = false, false
+		if v.skillCastUntil > a.clock || v.self != nil && v.self.CastActive() {
+			v.travel, v.autoRun = false, false
+		}
 	} else {
 		turn := float64(intent.turn) * 1.8 * dt // Phoenix KEY_ORBIT_SPEED.
 		if speed == 0 {
@@ -342,7 +365,7 @@ func (a *App) updateWorldStep(in *platform.Input, dt float64) {
 	if yaw != 0 || pitch != 0 {
 		v.orbitCamera(yaw, pitch)
 	}
-	if in.RightDown && !blocked && speed > 0 && !a.state.Self.Dead {
+	if in.RightDown && !blocked && !fixedHeading && speed > 0 && !a.state.Self.Dead {
 		// Right drag steers immediately; A/D become strafe keys.
 		v.facing = cameraHeading(v.target().Sub(v.eye), v.facing)
 	}
@@ -398,7 +421,7 @@ func (a *App) updateWorldStep(in *platform.Input, dt float64) {
 		}
 	}
 	jumpPressed := in.HasKey(platform.KeySpace)
-	if jumpPressed && !blocked && !swimming && !v.jumping && !v.evading && speed > 0 && !a.state.Self.Dead && !a.state.Self.Mounted {
+	if jumpPressed && !blocked && !swimming && !v.jumping && !v.evading && speed > 0 && !a.state.Self.Dead {
 		v.beginJump()
 		if err := a.world.Send(proto.MotionPacket(proto.MotionJump)); err != nil {
 			a.backToLogin("Unable to send jump.")
@@ -410,7 +433,11 @@ func (a *App) updateWorldStep(in *platform.Input, dt float64) {
 	if moving {
 		horizontal := dir.Norm()
 		if forward && strafe != 0 || swimming || a.state.Self.Mounted {
-			v.visualFacing = horizontal
+			if a.state.Self.Mounted && back && !forward {
+				v.visualFacing = fwd
+			} else {
+				v.visualFacing = horizontal
+			}
 		}
 		dir = horizontal
 		if swimming {
@@ -435,6 +462,7 @@ func (a *App) updateWorldStep(in *platform.Input, dt float64) {
 		}
 		moving = v.step(dir.Scale(min(speed*float32(dt), remaining)))
 	}
+	v.movingBackward = moving && a.state.Self.Mounted && back && !forward && !swimming
 	if v.evading {
 		v.evadeTime += float32(dt)
 	}
@@ -691,7 +719,10 @@ func (a *App) prepareSelfForDraw() {
 					}
 				}
 				if v.selfMount != nil {
-					v.selfMount.SetMoving(v.moving)
+					v.selfMount.SetMovement(v.moving, v.movingBackward)
+					if v.jumping {
+						v.selfMount.SetJumping()
+					}
 					v.selfMount.Update(float32(a.frameDT))
 					v.selfMount.World = render.Basis(v.pos, heading.Scale(-1), render.V3{0, 1, 0})
 					riderPos = v.selfMount.Seat()

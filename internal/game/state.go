@@ -244,7 +244,7 @@ func (s *State) Apply(p []byte) (Event, error) {
 		s.LastVehicle = result
 		s.VehicleSerial++
 		if result.Result == 1 {
-			s.Self.Mounted = !s.Self.Mounted
+			s.Self.Mounted = result.On != 0
 			s.vehicleShapeExpected = true
 		}
 	case proto.CharacterMountShape:

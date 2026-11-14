@@ -32,12 +32,25 @@ func itemReuseSeconds(group uint8) float64 {
 	return 0
 }
 
-func (a *App) itemCooldown(it proto.InventoryItem) float64 {
+func (a *App) itemCooldown(it proto.InventoryItem, key [2]uint8) float64 {
+	if left := a.mountCooldown(it, key); left > 0 {
+		return left
+	}
 	if a.arc == nil && a.items == nil {
 		return 0
 	}
 	if d := a.itemsItem(it.Type, it.TypeID); d != nil {
 		return max(0, a.inventory.cooldowns[d.ReqIg]-a.clock)
+	}
+	return 0
+}
+
+func (a *App) itemCooldownDuration(it proto.InventoryItem, key [2]uint8) float64 {
+	if duration := a.mountCooldownDuration(it, key); duration > 0 {
+		return duration
+	}
+	if d := a.itemsItem(it.Type, it.TypeID); d != nil {
+		return itemReuseSeconds(d.ReqIg)
 	}
 	return 0
 }
@@ -98,10 +111,9 @@ func (a *App) confirmedItems(op proto.Opcode) {
 	}
 }
 
-func (a *App) drawItemCooldown(it proto.InventoryItem, x, y, size int) {
-	if left := a.itemCooldown(it); left > 0 {
-		d := a.itemsItem(it.Type, it.TypeID)
-		a.sprites.DrawCooldown(a.white, float32(x), float32(y), float32(size), float32(left/itemReuseSeconds(d.ReqIg)), [4]float32{0, 0, 0, 160.0 / 255})
+func (a *App) drawItemCooldown(it proto.InventoryItem, key [2]uint8, x, y, size int) {
+	if left, duration := a.itemCooldown(it, key), a.itemCooldownDuration(it, key); left > 0 && duration > 0 {
+		a.sprites.DrawCooldown(a.white, float32(x), float32(y), float32(size), float32(left/duration), [4]float32{0, 0, 0, 160.0 / 255})
 		text := fmt.Sprintf("%.0f", math.Ceil(left))
 		a.font.Draw(a.sprites, text, x+(size-a.font.Width(text))/2, y+(size-13)/2, white, size)
 	}

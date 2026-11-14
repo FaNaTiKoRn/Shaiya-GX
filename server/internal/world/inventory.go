@@ -669,6 +669,12 @@ func (s *Session) handleItemBagToBag(p []byte) {
 		return
 	}
 	s.send(frame, "0x0204 item bag-to-bag")
+	if s.mounted && (srcBag == 0 && srcSlot == mountSlot || destBag == 0 && destSlot == mountSlot) {
+		mount := equippedItem(s.items, mountSlot)
+		if mount == nil || mount.Type != mountItemType || mount.UID != s.mountedMountUID {
+			s.setMountState(false, unmountedShape, "0x0216 mount item unequipped")
+		}
+	}
 	var slots []uint8
 	if srcBag == 0 && srcSlot < 8 {
 		slots = append(slots, srcSlot)

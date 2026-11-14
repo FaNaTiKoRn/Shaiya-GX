@@ -46,6 +46,7 @@ func (a *App) requestedSkillPresentation(packet []byte) {
 	if played {
 		p.action = actor.ActionID()
 		a.wv.requestedSkill = p
+		a.wv.movementActionID = p.action
 	}
 }
 

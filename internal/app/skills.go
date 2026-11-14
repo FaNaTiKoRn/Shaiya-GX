@@ -318,7 +318,7 @@ func (a *App) actionPacket(index int) []byte {
 			if a.inventory.pending || a.shop.pending {
 				return nil
 			}
-			if it, ok := a.state.Inventory[[2]uint8{q.Bag, uint8(q.Number)}]; !ok || a.itemCooldown(it) > 0 {
+			if it, ok := a.state.Inventory[[2]uint8{q.Bag, uint8(q.Number)}]; !ok || a.itemCooldown(it, [2]uint8{q.Bag, uint8(q.Number)}) > 0 {
 				return nil
 			}
 			return proto.UseItemPacket(q.Bag, uint8(q.Number))
@@ -424,14 +424,19 @@ func (a *App) drawActionBar(w, h int) {
 		if q.Bar >= ui.ActionBars || q.Slot >= ui.ActionSlots || q.Bag > 5 || q.Number >= 24 {
 			continue
 		}
-		it := a.state.Inventory[[2]uint8{q.Bag, uint8(q.Number)}]
+		key := [2]uint8{q.Bag, uint8(q.Number)}
+		it := a.state.Inventory[key]
 		slot := &slots[int(q.Bar)*ui.ActionSlots+int(q.Slot)]
 		slot.Label, slot.Count = "Empty", it.Count
 		if d := a.itemsItem(it.Type, it.TypeID); d != nil {
 			slot.Label = fmt.Sprintf("%s x%d", d.Name, it.Count)
-			slot.Cooldown = a.itemCooldown(it)
-			slot.CooldownDuration = itemReuseSeconds(d.ReqIg)
-			slot.ReadyFlash = cooldownFlash(a.inventory.cooldowns[d.ReqIg], a.clock)
+			slot.Cooldown = a.itemCooldown(it, key)
+			slot.CooldownDuration = a.itemCooldownDuration(it, key)
+			if a.mountCooldownDuration(it, key) > 0 {
+				slot.ReadyFlash = cooldownFlash(a.vehicle.mountCooldownUntil, a.clock)
+			} else {
+				slot.ReadyFlash = cooldownFlash(a.inventory.cooldowns[d.ReqIg], a.clock)
+			}
 			if file, uv, ok := ui.ItemIcon(it.Type, d.Icon); ok {
 				slot.Icon, slot.UV = a.assets.Texture("interface/"+file), uv
 			}

@@ -103,14 +103,18 @@ type SkillResult struct {
 
 // SkillCast is 0x0510 (Game.exe 0x58fea0; Rapture beginSkillCast).
 type SkillCast struct {
-	Source, Target uint32
-	ID             uint16
-	Level          uint8
+	Source, Target   uint32
+	ID               uint16
+	Level            uint8
+	MountCastSeconds uint32 // optional GX extension on a mount-only cast start
 }
 
 func DecodeSkillCast(p []byte) (m SkillCast, err error) {
 	r := NewReader(p)
 	m.Source, m.Target, m.ID, m.Level = r.U32(), r.U32(), r.U16(), r.U8()
+	if r.Remaining() >= 4 {
+		m.MountCastSeconds = r.U32()
+	}
 	return m, r.Err()
 }
 

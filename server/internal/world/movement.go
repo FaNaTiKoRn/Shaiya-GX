@@ -86,6 +86,7 @@ func (s *Session) applyTeleport(mapID uint16, x, y, z float32, label string) {
 		duelLeave(s.player, 0, false) // PvPChkLeaveByZoneLeave
 		guildDuelLeave(s.player, nil, 1)
 	}
+	s.actionLockUntil = time.Time{}
 	s.clearView(mapID == ch.MapID)
 	ch.MapID, ch.PosX, ch.PosY, ch.PosZ = mapID, x, y, z
 	if s.player != nil {
@@ -113,6 +114,9 @@ func (s *Session) handleCharacterMove(p []byte) {
 	if x != ch.PosX || z != ch.PosZ {
 		s.cancelMove()
 	}
+	if (motion != 0 || x != ch.PosX || y != ch.PosY || z != ch.PosZ) && s.refuseMovementDuringAction(time.Now(), direction) {
+		return
+	}
 	ch.PosX, ch.PosY, ch.PosZ = x, y, z
 	s.positionDirty = true
 	if s.player != nil {
@@ -134,6 +138,37 @@ func (s *Session) handleCharacterMove(p []byte) {
 	if time.Since(s.lastPositionSave) >= positionSaveInterval {
 		s.savePosition()
 	}
+}
+
+// refuseMovementDuringAction keeps client-predicted coordinates from
+// replacing the authoritative position while a cast or weapon animation is
+// still active. A bounded 0x0501 correction snaps the local client back.
+func (s *Session) refuseMovementDuringAction(now time.Time, direction uint16) bool {
+	reason := ""
+	remaining := time.Duration(0)
+	if s.cast != nil {
+		reason = "skill cast"
+		remaining = max(s.cast.readyAt.Sub(now), 0)
+	} else if s.mountCast != nil {
+		reason = "mount cast"
+		remaining = max(s.mountCast.readyAt.Sub(now), 0)
+	} else if s.actionLockUntil.After(now) {
+		reason = "weapon recovery"
+		remaining = s.actionLockUntil.Sub(now)
+	} else {
+		return false
+	}
+
+	if s.moveCorrectionAt.IsZero() || now.Sub(s.moveCorrectionAt) >= 100*time.Millisecond {
+		s.send(buildCharacterMove(s.char, 0, direction), "0x0501 authoritative action movement correction")
+		s.moveCorrectionAt = now
+	}
+	if s.moveRejectLogAt.IsZero() || now.Sub(s.moveRejectLogAt) >= time.Second {
+		s.log.Printf("GX Server World refused character movement during action character_id=%d action=%s remaining=%s",
+			s.char.ID, reason, remaining.Round(time.Millisecond))
+		s.moveRejectLogAt = now
+	}
+	return true
 }
 
 func (s *Session) handleEnteredPortal(index uint8) {
