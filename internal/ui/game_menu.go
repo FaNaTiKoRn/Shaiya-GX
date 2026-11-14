@@ -33,6 +33,11 @@ type GameMenu struct {
 	DisplayModes               []platform.DisplayMode
 	DisplayError               string
 	displayPopup               *PlayerMenu
+	antialiasButton            Button
+	antialiasOpen              bool
+	antialiasHover             int
+	antialiasHeld              int
+	antialiasChoices           []int
 	Position                   WindowPosition
 	Page                       MenuPage
 	frames                     [7]*render.Texture
@@ -52,17 +57,19 @@ type ClientSettings struct {
 	DisplayMode                               platform.DisplayMode
 	ChatRows                                  [2]int
 	ChatChannel                               uint8
-	Music, Effects                            float64
+	AutoHideChat                              bool `json:",omitempty"`
+	Music, Effects, Ambient                   float64
 	Glow, Brightness, Details, VisualDistance int
 	HideCloak, HideHelmet                     bool
 	MouseSensitivity                          int
 	UseMouse, InvertY                         bool
 	OwnName, PlayerNames, MonsterNames        bool
 	Shadows, Water, SkillEffects              bool
+	Antialias                                 int `json:",omitempty"`
 }
 
 func DefaultClientSettings() ClientSettings {
-	return ClientSettings{Glow: 2, Brightness: 2, Details: 2, VisualDistance: 2, ChatRows: [2]int{5, 5}, Music: 1, Effects: 1, MouseSensitivity: 3, UseMouse: true,
+	return ClientSettings{Antialias: AntialiasOff, Glow: 2, Brightness: 2, Details: 2, VisualDistance: 2, ChatRows: [2]int{5, 5}, Music: 1, Effects: 1, Ambient: 1, MouseSensitivity: 3, UseMouse: true,
 		OwnName: true, PlayerNames: true, MonsterNames: true, Shadows: true, Water: true, SkillEffects: true}
 }
 
@@ -72,7 +79,7 @@ func (c ClientSettings) Valid() bool {
 			return false
 		}
 	}
-	return c.DisplayMode.Valid() && c.Glow >= 0 && c.Glow <= 2 && c.Brightness >= 0 && c.Brightness <= 4 && c.Details >= 0 && c.Details <= 2 && c.VisualDistance >= 0 && c.VisualDistance <= 2 && c.ChatChannel <= 6 && !math.IsNaN(c.Music) && !math.IsNaN(c.Effects) && c.Music >= 0 && c.Music <= 1 && c.Effects >= 0 && c.Effects <= 1 && c.MouseSensitivity >= 0 && c.MouseSensitivity <= 6
+	return c.DisplayMode.Valid() && c.Antialias >= 0 && c.Antialias < antialiasLevels && c.Glow >= 0 && c.Glow <= 2 && c.Brightness >= 0 && c.Brightness <= 4 && c.Details >= 0 && c.Details <= 2 && c.VisualDistance >= 0 && c.VisualDistance <= 2 && c.ChatChannel <= 5 && !math.IsNaN(c.Music) && !math.IsNaN(c.Effects) && c.Music >= 0 && c.Music <= 1 && c.Effects >= 0 && c.Effects <= 1 && !math.IsNaN(c.Ambient) && c.Ambient >= 0 && c.Ambient <= 1 && c.MouseSensitivity >= 0 && c.MouseSensitivity <= 6
 }
 
 func NewGameMenu(t Textures) (*GameMenu, error) {
@@ -102,6 +109,9 @@ func NewGameMenu(t Textures) (*GameMenu, error) {
 	for i, state := range []int{0, 1, 2, 2, 3} {
 		m.displayButton.UV[i] = UV{float32(state) / 4, 0, float32(state+1) / 4, 1}
 	}
+	m.antialiasButton = m.displayButton
+	m.antialiasButton.OffX = 268 // right end of the old "Color Bit" box
+	m.antialiasHover, m.antialiasHeld = -1, -1
 	m.slider, m.check = ld.get("option_graphic_slider.png"), ld.get("chat_check.png")
 	return m, ld.err
 }
@@ -137,6 +147,8 @@ func (m *GameMenu) Open(page MenuPage) {
 	m.displayHeld = -1
 	m.displayButton.held = false
 	m.displayHover = -1
+	m.antialiasButton.held = false
+	m.antialiasOpen, m.antialiasHover, m.antialiasHeld = false, -1, -1
 	m.displayScroll.dragging = false
 	for i := range m.displayScroll.arrows {
 		m.displayScroll.arrows[i].held = false
@@ -191,6 +203,7 @@ func (m *GameMenu) controls(w, h int) (int, int, int, int) {
 	}
 	m.displayButton.OriginX, m.displayButton.OriginY = x, y
 	m.displayButton.Disabled = len(m.DisplayModes) < 2
+	m.antialiasButton.OriginX, m.antialiasButton.OriginY = x, y
 	m.reset.Disabled = m.Page == MenuKeys || m.Page == MenuExtraKeys
 	for i := range m.buttons {
 		m.buttons[i].OriginX, m.buttons[i].OriginY = x, y
@@ -201,7 +214,13 @@ func (m *GameMenu) controls(w, h int) (int, int, int, int) {
 func (m *GameMenu) Update(in *platform.Input, w, h int) int {
 	x, y, _, _ := m.controls(w, h)
 	if m.Page == MenuGraphics {
+		if !m.displayOpen {
+			if handled, result := m.updateAntialias(in, x, y); handled {
+				return result
+			}
+		}
 		if handled, result := m.updateDisplayModes(in, w, h, x, y); handled {
+			m.antialiasOpen = false
 			return result
 		}
 	}
@@ -249,8 +268,9 @@ func (m *GameMenu) Update(in *platform.Input, w, h int) int {
 		defaults := DefaultClientSettings()
 		switch m.Page {
 		case MenuSound:
-			m.Settings.Music, m.Settings.Effects = defaults.Music, defaults.Effects
+			m.Settings.Music, m.Settings.Effects, m.Settings.Ambient = defaults.Music, defaults.Effects, defaults.Ambient
 		case MenuUser:
+			m.Settings.AutoHideChat = defaults.AutoHideChat
 			m.Settings.UseMouse, m.Settings.InvertY, m.Settings.MouseSensitivity = true, false, 3
 			m.Settings.OwnName, m.Settings.PlayerNames, m.Settings.MonsterNames = true, true, true
 		case MenuGraphics:
@@ -258,6 +278,7 @@ func (m *GameMenu) Update(in *platform.Input, w, h int) int {
 			m.Settings.Glow, m.Settings.Brightness, m.Settings.Details, m.Settings.VisualDistance = 2, 2, 2, 2
 			m.Settings.HideCloak, m.Settings.HideHelmet = false, false
 			m.Settings.DisplayMode = platform.DisplayMode{}
+			m.Settings.Antialias = defaults.Antialias
 		}
 		return MenuChanged
 	}
@@ -280,7 +301,7 @@ func (m *GameMenu) Update(in *platform.Input, w, h int) int {
 		}
 	}
 	if m.Page == MenuSound || m.Page == MenuUser {
-		count := 2
+		count := 3
 		if m.Page == MenuUser {
 			count = 1
 		}
@@ -297,8 +318,10 @@ func (m *GameMenu) Update(in *platform.Input, w, h int) int {
 				if m.Page == MenuSound {
 					if i == 0 {
 						m.Settings.Music = math.Round(value*6) / 6
-					} else {
+					} else if i == 1 {
 						m.Settings.Effects = math.Round(value*6) / 6
+					} else {
+						m.Settings.Ambient = math.Round(value*6) / 6
 					}
 				} else {
 					m.Settings.MouseSensitivity = int(math.Round(value * 6))
@@ -338,7 +361,7 @@ func (m *GameMenu) checks() []menuCheck {
 	s := &m.Settings
 	switch m.Page {
 	case MenuUser:
-		return []menuCheck{{34, 83, &s.UseMouse}, {137, 83, nil}, {241, 83, &s.InvertY}, {34, 202, &s.OwnName}, {137, 202, &s.PlayerNames}, {34, 228, &s.MonsterNames}}
+		return []menuCheck{{34, 83, &s.UseMouse}, {137, 83, nil}, {241, 83, &s.InvertY}, {34, 202, &s.OwnName}, {137, 202, &s.PlayerNames}, {34, 228, &s.MonsterNames}, {137, 228, &s.AutoHideChat}}
 	case MenuGraphics:
 		return []menuCheck{{35, 404, &s.Shadows}, {156, 404, &s.Water}, {35, 429, &s.HideCloak}, {156, 429, &s.HideHelmet}, {35, 451, &s.SkillEffects}}
 	}
@@ -372,8 +395,14 @@ func (m *GameMenu) Draw(s *render.Sprites, f *Font, w, h int, solid ...*render.T
 	case MenuSound:
 		knob(35, 106, m.Settings.Music, 185)
 		knob(35, 156, m.Settings.Effects, 185)
+		knob(35, 206, m.Settings.Ambient, 185)
 	case MenuUser:
 		knob(36, 140, float64(m.Settings.MouseSensitivity)/6, 185)
+		// Reuse the unsupported banned-words filter slot in Name/Chat Setup.
+		if len(solid) > 0 {
+			s.Draw(solid[0], float32(x+155), float32(y+225), 191, 22, 0, 0, 1, 1, [4]float32{.045, .045, .04, 1})
+			f.Draw(s, "Auto-hide chat", x+156, y+229, white, 185)
+		}
 	case MenuGraphics:
 		for i, v := range []int{m.Settings.Glow, m.Settings.Brightness, m.Settings.Details, m.Settings.VisualDistance} {
 			limit := []int{2, 4, 2, 2}[i]
@@ -384,7 +413,11 @@ func (m *GameMenu) Draw(s *render.Sprites, f *Font, w, h int, solid ...*render.T
 		if m.DisplayError != "" {
 			f.Draw(s, m.DisplayError, x+16, y+110, RGBColor(0xffa080), 275)
 		}
-		f.Draw(s, "32 bit", x+211, y+87, white, 64)
+		var blank *render.Texture
+		if len(solid) > 0 {
+			blank = solid[0]
+		}
+		m.drawAntialias(s, f, blank, x, y)
 	case MenuKeys:
 		keys := [][2]string{{"A", "D"}, {"W", "S"}, {"Q", "E"}, {"Tab", "NumLock"}, {"C", "Space"}, {"T", "I"}, {"K", "B"}, {"U", "G"}, {"O", "M"}, {"", "Esc"}}
 		for i, row := range keys {
@@ -398,7 +431,7 @@ func (m *GameMenu) Draw(s *render.Sprites, f *Font, w, h int, solid ...*render.T
 			f.Draw(s, fmt.Sprintf("%d", key), x+120+(i%2)*170, y+68+(i/2)*31, white, 50)
 		}
 	case MenuHelp:
-		lines := []string{"Character controls", "W / S: forward / backward", "A / D: turn; Q / E: side step", "Right mouse: steer; right mouse + A / D: side step", "Both mouse buttons: move forward", "Tab: walk / run; NumLock: automatic run", "Space: jump; C: sit / stand", "Windows", "T: status; I: inventory; K: skills; B: actions", "U: quests; G: guild; M: map; O / Esc: options", "Drag learned skills or inventory items onto an action bar.", "Drag bars to move; corner button changes orientation."}
+		lines := []string{"Character controls", "W / S: forward / backward", "A / D: turn; Q / E: side step", "Right mouse: orbit camera; moving turns to it; right mouse + A / D: side step", "Both mouse buttons: move forward", "Tab: walk / run; NumLock: automatic run", "Space: jump; C: sit / stand", "Windows", "T: status; I: inventory; K: skills; B: actions", "U: quests; G: guild; M: map; O / Esc: options", "Drag learned skills or inventory items onto an action bar.", "Drag bars to move; corner button changes orientation."}
 		for i, line := range lines {
 			f.Draw(s, line, x+24, y+143+i*16, white, 400)
 		}
@@ -410,6 +443,7 @@ func (m *GameMenu) Draw(s *render.Sprites, f *Font, w, h int, solid ...*render.T
 	}
 	if len(solid) > 0 {
 		m.drawDisplayModes(s, f, solid[0], x, y)
+		m.drawAntialiasPopup(s, f, solid[0], x, y)
 	}
 }
 

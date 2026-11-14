@@ -46,6 +46,12 @@ const (
 )
 
 type App struct {
+	chatBubbles                         []chatBubble
+	quickPotions                        quickPotionView
+	mapLabels                           mapLabelView
+	skillSoundEvents                    map[skillSoundKey]float64
+	loading                             mapLoading
+	loadingScreen                       *ui.LoadingScreen
 	appliedDisplay                      platform.DisplayMode
 	displayConfigured                   bool
 	social                              socialView
@@ -88,6 +94,7 @@ type App struct {
 	windowDrag                          windowDrag
 	sound                               *audio.Engine
 	soundErrors                         map[string]bool
+	mapAudio                            mapAudioState
 	cfg                                 Config
 	arc                                 *archive.Archive
 	sprites                             *render.Sprites
@@ -127,6 +134,15 @@ type App struct {
 	frameTarget                         *render.WaterTarget
 	sceneGlow                           *render.SceneGlow
 	sceneGlowFailed                     bool
+	msaaTarget                          *render.MSAATarget
+	fxaa                                *render.FXAA
+	taa                                 *render.TemporalAA
+	taaFailed                           bool
+	aaMode                              int
+	aaSamples                           []int
+	aaSize                              [2]int
+	aaContext                           [4]int
+	msaaFailed, fxaaFailed              bool
 	frameWidth, frameHeight             int
 	worlds                              map[string]*scene.World
 	skinner                             *render.Skinner
@@ -216,12 +232,17 @@ func New(cfg Config, arc *archive.Archive) (*App, error) {
 	if a.sprites, err = render.NewSprites(8192); err != nil {
 		return nil, err
 	}
-	if a.font, err = ui.LoadFont(13); err != nil {
+	fonts, err := ui.LoadFontSource(arc.ReadFile)
+	if err != nil {
 		return nil, err
 	}
-	if a.tooltipFont, err = ui.LoadTooltipFont(); err != nil {
+	if a.font, err = fonts.Load(13); err != nil {
 		return nil, err
 	}
+	if a.tooltipFont, err = fonts.Load(13); err != nil {
+		return nil, err
+	}
+
 	if b, err := arc.ReadFile("sysmsg-uni.txt"); err == nil {
 		a.msg = text.ParseSysMsg(b)
 	} else {
@@ -261,6 +282,8 @@ func New(cfg Config, arc *archive.Archive) (*App, error) {
 	if cfg.DisplayModes != nil {
 		a.gameMenu.SetDisplayModes(cfg.DisplayModes())
 	}
+	a.aaSamples = render.SupportedMSAASamples()
+	a.gameMenu.SetAntialiasSamples(a.aaSamples)
 	if a.menuConfirm, err = ui.NewMessage(a); err != nil {
 		return nil, err
 	}
@@ -383,9 +406,11 @@ func New(cfg Config, arc *archive.Archive) (*App, error) {
 		}
 		a.soundErrors = map[string]bool{}
 	}
+	a.loadingScreen = ui.NewLoadingScreen(a)
 	a.loadSavedID()
 	a.loadUILayout()
 	a.loadClientSettings()
+	a.gameMenu.Settings.Antialias = ui.NormalizeAntialias(a.gameMenu.Settings.Antialias, a.aaSamples)
 	return a, nil
 }
 
@@ -426,7 +451,12 @@ func (a *App) Update(in *platform.Input, w, h int, dt float64) {
 		break
 	}
 	a.pumpWorld()
+	loading := a.updateMapLoading()
 	a.updateAudio()
+	if loading {
+		a.clock += dt
+		return
+	}
 	switch a.screen {
 	case screenLogin:
 		switch a.login.Update(in, w, h, dt) {
@@ -486,6 +516,11 @@ func (a *App) drawFrame(w, h int) {
 	render.ResetDrawCalls()
 	started := time.Now()
 	defer func() { a.performance.meter.End(); a.performance.drawCPU = time.Since(started) }()
+	if a.loading.active && !a.loading.started {
+		a.drawMapLoading(w, h)
+		return
+	}
+	msaa := a.beginSceneAntialias(w, h)
 	if a.screen == screenLogin || a.screen == screenServers {
 		if ls := a.loginBackdrop(); ls != nil {
 			ls.Update(a.frameDT)
@@ -495,13 +530,19 @@ func (a *App) drawFrame(w, h int) {
 	if a.screen == screenWorld {
 		a.drawWorldView(w, h)
 	}
-	if a.screen == screenCharacters && a.state != nil && a.state.Phase != game.PhaseFaction {
+	if a.screen == screenCharacters && a.state != nil && (a.state.Phase == game.PhaseCharSelect || a.state.Phase == game.PhaseLoading) {
 		fury := a.state.Faction.Faction == 1
 		if a.creating {
 			a.drawCreation(w, h)
 		} else {
 			a.drawWorld(a.selectWorld(fury), selectEye, selectTarget, w, h)
 		}
+	}
+	// Resolve before the loading screen so it never draws into the MSAA target.
+	a.endSceneAntialias(msaa)
+	if a.loading.active {
+		a.drawMapLoading(w, h)
+		return
 	}
 	if a.scene3d.ReverseDepth && !a.sceneGlowFailed {
 		if a.sceneGlow == nil {
@@ -602,6 +643,7 @@ func loginMessage(err error) string {
 }
 
 func (a *App) backToLogin(msg string) {
+	a.loading = mapLoading{}
 	a.menuOpen, a.menuPending = false, false
 	a.buffs = buffsView{}
 	a.party = partyView{}
@@ -825,6 +867,7 @@ func (a *App) pumpWorld() {
 			a.confirmedSocial(ev.Op)
 			a.confirmedEffects(p)
 			a.confirmedSound(p)
+			a.confirmedChatBubble(ev.Op)
 			if ev.Op == proto.SetStatPoint || ev.Op == proto.StatsReset {
 				a.status.pending = false
 				if a.statusUI != nil {

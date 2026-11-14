@@ -225,7 +225,7 @@ func (s *fieldStream) draw(r *render.Scene3D) {
 }
 
 func (s *fieldStream) drawWithClipCulling(r *render.Scene3D, clipCulling bool) {
-	frustum := render.ViewFrustum(r.View, r.Proj)
+	frustum := render.ViewFrustum(r.View, r.VisibilityProjection())
 	for _, batch := range s.terrainBatches {
 		batch.ranges = batch.ranges[:0]
 	}
@@ -338,6 +338,14 @@ func (w *World) Close() {
 		w.mapFX.close()
 		w.mapFX = nil
 	}
+	for _, p := range w.dg {
+		p.mesh.Delete()
+	}
+	w.dg = nil
+	w.dgOrder = nil
+	w.dungeonOccluders = nil
+	w.dungeonInstances = nil
+	w.occlusion = nil
 	if w.stream == nil {
 		return
 	}

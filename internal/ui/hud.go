@@ -87,7 +87,8 @@ func (h *HUD) Draw(s *render.Sprites, f *Font, state HUDState) {
 		f.Draw(s, text, left+1, top+1, shadow, width)
 		f.Draw(s, text, left, top, tint, width)
 	}
-	label(state.Name, x+88, y+14, 109, 16, false)
+	// Centered over the bars (x+82, 114 wide), not left-aligned in the plate.
+	label(state.Name, x+82, y+18, 114, 16, true) // +4: middle of the dark name plate
 	label(fmt.Sprint(state.Level), x+62, y+15, 22, 20, true)
 	for i, pool := range []Resource{state.HP, state.MP, state.SP} {
 		label(fmt.Sprintf("%d/%d", pool.Current, pool.Max), x+81, y+36+16*i, 116, 20, true)
@@ -111,7 +112,8 @@ func (h *HUD) Draw(s *render.Sprites, f *Font, state HUDState) {
 			if state.TargetHP.Max == 0 {
 				text = fmt.Sprintf("HP %d", state.TargetHP.Current)
 			}
-			f.Draw(s, text, tx+128-f.Width(text)/2, ty+43, white, 140)
+			// Centered on the 140px bar drawn at tx+41.
+			f.Draw(s, text, tx+111-f.Width(text)/2, ty+43, white, 140)
 		}
 	}
 }
@@ -130,14 +132,15 @@ func (h *HUD) TargetOrigin(w, height int) (int, int) {
 }
 
 // DrawCast follows Game.exe 0x004a3020: a 5x64 black rectangle and a
-// 3x62 blue elapsed-progress column. No texture, spell name or timer text.
+// 3x62 blue elapsed-progress column, filling upwards per the requested UI.
+// No texture, spell name or timer text.
 func (h *HUD) DrawCast(s *render.Sprites, solid *render.Texture, x, y int, left, total float32) {
 	fill, ok := castFillHeight(left, total)
 	if !ok {
 		return
 	}
 	s.Draw(solid, float32(x), float32(y), 5, 64, 0, 0, 1, 1, [4]float32{0, 0, 0, 1})
-	s.Draw(solid, float32(x+1), float32(y+1), 3, float32(fill), 0, 0, 1, 1, [4]float32{0, 0, 1, 1})
+	s.Draw(solid, float32(x+1), float32(y+63-fill), 3, float32(fill), 0, 0, 1, 1, [4]float32{0, 0, 1, 1})
 }
 
 func castFillHeight(left, total float32) (int, bool) {

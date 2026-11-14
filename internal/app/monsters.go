@@ -105,7 +105,7 @@ func (a *App) prepareMonsters() {
 }
 
 func (a *App) drawMonsters() {
-	frustum := render.ViewFrustum(a.scene3d.View, a.scene3d.Proj)
+	frustum := render.ViewFrustum(a.scene3d.View, a.scene3d.VisibilityProjection())
 	for id, e := range a.state.Entities {
 		if e.Kind != game.KindMob {
 			continue
@@ -114,7 +114,6 @@ func (a *App) drawMonsters() {
 			if cached.actor.Visible(frustum, a.scene3d.ClipPlane) {
 				cached.actor.Draw(a.skinner, a.scene3d)
 			}
-			a.drawActorShadow(cached.actor.Character)
 		}
 	}
 }

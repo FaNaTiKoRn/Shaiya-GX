@@ -51,13 +51,9 @@ func (s *Session) handleChat(op packet.Opcode, p []byte) {
 		s.executeMountCommand(castDuration)
 		return
 	}
-	itemType, typeID, isGetItem, validGetItem := parseGetItemCommand(msg)
-	if isGetItem {
-		if !validGetItem {
-			s.commandReply("Uso: /getitem <tipo> <id>. Ejemplo: /getitem 42 2")
-			return
-		}
-		s.executeGetItemCommand(itemType, typeID)
+	// Delegate GM chat commands to the current upstream dispatcher, including
+	// its transactional, stack-aware /getitem type id quantity command.
+	if s.handleGMCommand(msg) {
 		return
 	}
 	if isTownCommand(msg) {
